@@ -50,9 +50,10 @@ public abstract class AbstractServerClusterTxTest extends AbstractServerClusterI
           if ((i + 1) % 100 == 0)
             System.out.println("\nWriter " + database.getURL() + " managed " + (i + 1) + "/" + count + " records so far");
 
+          final int id = baseCount + i;
           database.begin();
           try {
-            ODocument person = createRecord(database, serverId, i);
+            ODocument person = createRecord(database, serverId, id);
             updateRecord(database, person);
             checkRecord(database, person);
             deleteRecord(database, person);

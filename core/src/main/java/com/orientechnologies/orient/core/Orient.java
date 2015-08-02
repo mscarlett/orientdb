@@ -19,6 +19,27 @@
  */
 package com.orientechnologies.orient.core;
 
+import com.orientechnologies.common.io.OFileUtils;
+import com.orientechnologies.common.io.OIOUtils;
+import com.orientechnologies.common.listener.OListenerManger;
+import com.orientechnologies.common.log.OLogManager;
+import com.orientechnologies.common.parser.OSystemVariableResolver;
+import com.orientechnologies.common.profiler.OProfiler;
+import com.orientechnologies.common.profiler.OProfilerStub;
+import com.orientechnologies.orient.core.command.script.OScriptManager;
+import com.orientechnologies.orient.core.config.OGlobalConfiguration;
+import com.orientechnologies.orient.core.conflict.ORecordConflictStrategyFactory;
+import com.orientechnologies.orient.core.db.ODatabaseFactory;
+import com.orientechnologies.orient.core.db.ODatabaseLifecycleListener;
+import com.orientechnologies.orient.core.db.ODatabaseThreadLocalFactory;
+import com.orientechnologies.orient.core.engine.OEngine;
+import com.orientechnologies.orient.core.engine.local.OEngineLocalPaginated;
+import com.orientechnologies.orient.core.engine.memory.OEngineMemory;
+import com.orientechnologies.orient.core.exception.OConfigurationException;
+import com.orientechnologies.orient.core.record.ORecordFactoryManager;
+import com.orientechnologies.orient.core.storage.OIdentifiableStorage;
+import com.orientechnologies.orient.core.storage.OStorage;
+
 import java.io.IOException;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
@@ -34,27 +55,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-import com.orientechnologies.common.io.OFileUtils;
-import com.orientechnologies.common.io.OIOUtils;
-import com.orientechnologies.common.listener.OListenerManger;
-import com.orientechnologies.common.log.OLogManager;
-import com.orientechnologies.common.parser.OSystemVariableResolver;
-import com.orientechnologies.common.profiler.OProfiler;
-import com.orientechnologies.common.profiler.OProfilerMBean;
-import com.orientechnologies.orient.core.command.script.OScriptManager;
-import com.orientechnologies.orient.core.config.OGlobalConfiguration;
-import com.orientechnologies.orient.core.conflict.ORecordConflictStrategyFactory;
-import com.orientechnologies.orient.core.db.ODatabaseFactory;
-import com.orientechnologies.orient.core.db.ODatabaseLifecycleListener;
-import com.orientechnologies.orient.core.db.ODatabaseThreadLocalFactory;
-import com.orientechnologies.orient.core.engine.OEngine;
-import com.orientechnologies.orient.core.engine.local.OEngineLocalPaginated;
-import com.orientechnologies.orient.core.engine.memory.OEngineMemory;
-import com.orientechnologies.orient.core.exception.OConfigurationException;
-import com.orientechnologies.orient.core.record.ORecordFactoryManager;
-import com.orientechnologies.orient.core.storage.OIdentifiableStorage;
-import com.orientechnologies.orient.core.storage.OStorage;
 
 public class Orient extends OListenerManger<OOrientListener> {
   public static final String                                                         ORIENTDB_HOME                 = "ORIENTDB_HOME";
@@ -91,7 +91,7 @@ public class Orient extends OListenerManger<OOrientListener> {
   private volatile Timer                                                             timer;
   private volatile ORecordFactoryManager                                             recordFactoryManager          = new ORecordFactoryManager();
   private OrientShutdownHook                                                         shutdownHook;
-  private volatile OProfilerMBean                                                    profiler;
+  private volatile OProfiler                                                         profiler;
   private ODatabaseThreadLocalFactory                                                databaseThreadFactory;
   private volatile boolean                                                           active                        = false;
   private ThreadPoolExecutor                                                         workers;
@@ -196,7 +196,7 @@ public class Orient extends OListenerManger<OOrientListener> {
       if (timer == null)
         timer = new Timer(true);
 
-      profiler = new OProfiler();
+      profiler = new OProfilerStub();
 
       shutdownHook = new OrientShutdownHook();
       if (signalHandler == null) {
@@ -287,7 +287,7 @@ public class Orient extends OListenerManger<OOrientListener> {
       if (threadGroup != null)
         // STOP ALL THE PENDING THREADS
         threadGroup.interrupt();
-      
+
       if (shutdownHook != null) {
         shutdownHook.cancel();
         shutdownHook = null;
@@ -327,6 +327,8 @@ public class Orient extends OListenerManger<OOrientListener> {
           }
 
       }
+
+      System.gc();
 
       OLogManager.instance().info(this, "OrientDB Engine shutdown complete");
       OLogManager.instance().flush();
@@ -637,6 +639,9 @@ public class Orient extends OListenerManger<OOrientListener> {
       shutdownHook.cancel();
       shutdownHook = null;
     }
+  }
+
+  public void removeSignalHandler() {
     if (signalHandler != null) {
       signalHandler.cancel();
       signalHandler = null;
@@ -654,6 +659,9 @@ public class Orient extends OListenerManger<OOrientListener> {
   public void addDbLifecycleListener(final ODatabaseLifecycleListener iListener) {
     final Map<ODatabaseLifecycleListener, ODatabaseLifecycleListener.PRIORITY> tmp = new LinkedHashMap<ODatabaseLifecycleListener, ODatabaseLifecycleListener.PRIORITY>(
         dbLifecycleListeners);
+    if (iListener.getPriority() == null)
+      throw new IllegalArgumentException("Priority of DatabaseLifecycleListener '" + iListener + "' cannot be null");
+
     tmp.put(iListener, iListener.getPriority());
     dbLifecycleListeners.clear();
     for (ODatabaseLifecycleListener.PRIORITY p : ODatabaseLifecycleListener.PRIORITY.values()) {
@@ -688,11 +696,11 @@ public class Orient extends OListenerManger<OOrientListener> {
     return databaseFactory;
   }
 
-  public OProfilerMBean getProfiler() {
+  public OProfiler getProfiler() {
     return profiler;
   }
 
-  public void setProfiler(final OProfilerMBean iProfiler) {
+  public void setProfiler(final OProfiler iProfiler) {
     profiler = iProfiler;
   }
 

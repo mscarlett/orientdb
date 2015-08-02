@@ -19,18 +19,20 @@
  */
 package com.orientechnologies.orient.core.command;
 
-import java.util.Collections;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
-
 import com.orientechnologies.common.listener.OProgressListener;
 import com.orientechnologies.common.parser.OBaseParser;
 import com.orientechnologies.orient.core.config.OGlobalConfiguration;
 import com.orientechnologies.orient.core.db.ODatabaseDocumentInternal;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
+import com.orientechnologies.orient.core.db.OExecutionThreadLocal;
+import com.orientechnologies.orient.core.exception.OCommandExecutionException;
 import com.orientechnologies.orient.core.metadata.security.ORole;
 import com.orientechnologies.orient.core.metadata.security.ORule;
+
+import java.util.Collections;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Abstract implementation of Executor Command interface.
@@ -121,6 +123,20 @@ public abstract class OCommandExecutorAbstract extends OBaseParser implements OC
     return false;
   }
 
+  protected boolean checkInterruption() {
+    return checkInterruption(this.context);
+  }
+
+  public static boolean checkInterruption(final OCommandContext iContext) {
+    if (OExecutionThreadLocal.isInterruptCurrentOperation())
+      throw new OCommandExecutionException("Operation has been interrupted");
+
+    if (iContext != null && !iContext.checkTimeout())
+      return false;
+
+    return true;
+  }
+
   protected String upperCase(String text) {
     StringBuilder result = new StringBuilder(text.length());
     for (char c : text.toCharArray()) {
@@ -136,10 +152,5 @@ public abstract class OCommandExecutorAbstract extends OBaseParser implements OC
 
   public OCommandDistributedReplicateRequest.DISTRIBUTED_RESULT_MGMT getDistributedResultManagement() {
     return OCommandDistributedReplicateRequest.DISTRIBUTED_RESULT_MGMT.CHECK_FOR_EQUALS;
-  }
-
-  @Override
-  public boolean isLocalExecution() {
-    return false;
   }
 }

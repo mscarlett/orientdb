@@ -20,7 +20,6 @@
 package com.orientechnologies.orient.server.distributed;
 
 import com.orientechnologies.common.concur.ONeedRetryException;
-import com.orientechnologies.common.concur.resource.OSharedResourceAdaptiveExternal;
 import com.orientechnologies.common.exception.OException;
 import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.util.OCallable;
@@ -249,22 +248,14 @@ public class ODistributedStorage implements OStorage, OFreezableStorage, OAutosh
 
       switch (executionMode) {
       case LOCAL:
-        return wrapped.command(iCommand);
+        return ODistributedAbstractPlugin.runInDistributedMode(new Callable() {
+          @Override
+          public Object call() throws Exception {
+            return wrapped.command(iCommand);
+          }
+        });
 
       case REPLICATE:
-        if (exec.isLocalExecution())
-          // EXECUTE CURRENT QUERY LOCALLY, BUT LET TO THE SUB-QUERY TO BE DISTRIBUTED
-          return OScenarioThreadLocal.executeAsDefault(new Callable<Object>() {
-            @Override
-            public Object call() throws Exception {
-              // LOCAL NODE, AVOID TO DISTRIBUTE IT
-              if (exec instanceof OCommandExecutorSQLSelect)
-                // EXECUTE SUB QUERY ON REQUIRED SERVER
-                ((OCommandExecutorSQLSelect) exec).setLazyIteration(false);
-              return exec.execute(null);
-            }
-          });
-
         // REPLICATE IT, GET ALL THE INVOLVED NODES
         final Collection<String> involvedClusters = exec.getInvolvedClusters();
 
@@ -274,7 +265,12 @@ public class ODistributedStorage implements OStorage, OFreezableStorage, OAutosh
 
           if (nodeClusterMap.size() == 1 && nodeClusterMap.keySet().iterator().next().equals(localNodeName))
             // LOCAL NODE, AVOID TO DISTRIBUTE IT
-            return wrapped.command(iCommand);
+            return ODistributedAbstractPlugin.runInDistributedMode(new Callable() {
+              @Override
+              public Object call() throws Exception {
+                return wrapped.command(iCommand);
+              }
+            });
 
           // SELECT: SPLIT CLASSES/CLUSTER IF ANY
           final Map<String, Object> results = executeOnServers(iCommand, involvedClusters, nodeClusterMap);
@@ -319,7 +315,12 @@ public class ODistributedStorage implements OStorage, OFreezableStorage, OAutosh
 
           if (executeLocally(localNodeName, dbCfg, exec, involvedClusters, nodes))
             // LOCAL NODE, AVOID TO DISTRIBUTE IT
-            return wrapped.command(iCommand);
+            return ODistributedAbstractPlugin.runInDistributedMode(new Callable() {
+              @Override
+              public Object call() throws Exception {
+                return wrapped.command(iCommand);
+              }
+            });
 
           result = dManager.sendRequest(getName(), involvedClusters, nodes, task, EXECUTION_MODE.RESPONSE);
           if (exec.involveSchema())
@@ -346,23 +347,39 @@ public class ODistributedStorage implements OStorage, OFreezableStorage, OAutosh
     }
   }
 
-  protected Map<String, Object> executeOnServers(OCommandRequestText iCommand, Collection<String> involvedClusters,
-      Map<String, Collection<String>> nodeClusterMap) {
+  protected Map<String, Object> executeOnServers(final OCommandRequestText iCommand, final Collection<String> involvedClusters,
+      final Map<String, Collection<String>> nodeClusterMap) {
+
     final Map<String, Object> results = new HashMap<String, Object>(nodeClusterMap.size());
 
     // EXECUTE DIFFERENT TASK ON EACH SERVER
     final List<String> nodes = new ArrayList<String>(1);
     for (Map.Entry<String, Collection<String>> c : nodeClusterMap.entrySet()) {
+      final String nodeName = c.getKey();
 
-      final OAbstractCommandTask task = iCommand instanceof OCommandScript ? new OScriptTask(iCommand) : new OSQLCommandTask(
-          iCommand, c.getValue());
-      task.setResultStrategy(OAbstractRemoteTask.RESULT_STRATEGY.ANY);
+      if (!dManager.isNodeAvailable(nodeName, getName())) {
 
-      nodes.clear();
-      nodes.add(c.getKey());
+        ODistributedServerLog.warn(this, dManager.getLocalNodeName(), nodeName, ODistributedServerLog.DIRECTION.OUT,
+            "Node '%s' is involved in the command '%s' against database '%s', but the node is not active. Excluding it", nodeName,
+            iCommand, wrapped.getName());
 
-      results.put(c.getKey(), dManager.sendRequest(getName(), involvedClusters, nodes, task, EXECUTION_MODE.RESPONSE));
+      } else {
+
+        final OAbstractCommandTask task = iCommand instanceof OCommandScript ? new OScriptTask(iCommand) : new OSQLCommandTask(
+            iCommand, c.getValue());
+        task.setResultStrategy(OAbstractRemoteTask.RESULT_STRATEGY.ANY);
+
+        nodes.clear();
+        nodes.add(nodeName);
+
+        results.put(nodeName, dManager.sendRequest(getName(), involvedClusters, nodes, task, EXECUTION_MODE.RESPONSE));
+
+      }
     }
+
+    if (results.isEmpty())
+      throw new ODistributedException("No active nodes found to execute command: " + iCommand);
+
     return results;
   }
 
@@ -1308,21 +1325,6 @@ public class ODistributedStorage implements OStorage, OFreezableStorage, OAutosh
   }
 
   @Override
-  public int getUsers() {
-    return wrapped.getUsers();
-  }
-
-  @Override
-  public int addUser() {
-    return wrapped.addUser();
-  }
-
-  @Override
-  public int removeUser() {
-    return wrapped.removeUser();
-  }
-
-  @Override
   public long[] getClusterDataRange(final int currentClusterId) {
     return wrapped.getClusterDataRange(currentClusterId);
   }
@@ -1346,6 +1348,14 @@ public class ODistributedStorage implements OStorage, OFreezableStorage, OAutosh
     return wrapped.higherPhysicalPositions(currentClusterId, entry);
   }
 
+  public OServer getServer() {
+    return serverInstance;
+  }
+
+  public ODistributedServerManager getDistributedManager() {
+    return dManager;
+  }
+
   @Override
   public OPhysicalPosition[] ceilingPhysicalPositions(int clusterId, OPhysicalPosition physicalPosition) {
     return wrapped.ceilingPhysicalPositions(clusterId, physicalPosition);
@@ -1359,11 +1369,6 @@ public class ODistributedStorage implements OStorage, OFreezableStorage, OAutosh
   @Override
   public OPhysicalPosition[] lowerPhysicalPositions(int currentClusterId, OPhysicalPosition entry) {
     return wrapped.lowerPhysicalPositions(currentClusterId, entry);
-  }
-
-  @Override
-  public OSharedResourceAdaptiveExternal getLock() {
-    return wrapped.getLock();
   }
 
   public OStorage getUnderlying() {
